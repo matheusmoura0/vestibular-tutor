@@ -3,227 +3,221 @@ import pdfplumber
 import re
 import google.generativeai as genai
 
-# --- 1. CONFIGURAÇÃO VISUAL E CSS ---
-st.set_page_config(page_title="Vestibular Master", page_icon="🎓", layout="centered")
+# --- 1. CONFIGURAÇÃO E CSS ---
+st.set_page_config(page_title="Vestibular Simulator", page_icon="✍️", layout="centered")
 
-# CSS para limpar a interface e melhorar a tipografia
 st.markdown("""
     <style>
-    .stApp {
-        background-color: #f8f9fa;
-    }
+    /* Estilo Geral */
+    .stApp { background-color: #f0f2f6; }
+    
+    /* Card da Questão */
     .question-card {
-        background-color: #ffffff;
+        background-color: white;
         padding: 30px;
-        border-radius: 15px;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-        border: 1px solid #e0e0e0;
-        font-size: 18px;
-        line-height: 1.6;
-        color: #2c3e50;
+        border-radius: 12px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+        border-left: 6px solid #3b82f6; /* Detalhe azul na esquerda */
         margin-bottom: 20px;
+        font-size: 18px;
+        color: #1f2937;
     }
-    .stButton button {
+    
+    /* Numeração da Questão */
+    .q-number {
+        color: #3b82f6;
+        font-weight: 800;
+        font-size: 1.2rem;
+        text-transform: uppercase;
+        margin-bottom: 10px;
+        display: block;
+    }
+
+    /* Botões de Alternativa Customizados */
+    div.stButton > button {
         width: 100%;
-        border-radius: 8px;
-        height: 50px;
+        height: 60px;
+        border-radius: 10px;
+        font-weight: bold;
+        font-size: 20px;
+        transition: all 0.2s;
     }
-    .header-text {
-        color: #1e3a8a;
-        font-weight: 700;
+    
+    /* Destaque para mensagem de erro/acerto */
+    .feedback-box {
+        padding: 15px;
+        border-radius: 8px;
+        margin-top: 10px;
+        text-align: center;
+        font-weight: bold;
     }
     </style>
 """, unsafe_allow_html=True)
 
-# --- 2. FUNÇÕES DE EXTRAÇÃO (LÓGICA) ---
+# --- 2. FUNÇÕES DE EXTRAÇÃO (MANTIDAS) ---
 
 def extract_text_two_columns(page):
-    """Lê coluna esquerda depois coluna direita (para provas tipo Univesp)."""
     width, height = page.width, page.height
-    
-    # Margens de corte (ajuste se cortar cabeçalho/rodapé)
     top_crop = height * 0.10
     bottom_crop = height * 0.90
-    
     left_box = (0, top_crop, width/2, bottom_crop)
     right_box = (width/2, top_crop, width, bottom_crop)
-    
     text_left = page.crop(left_box).extract_text() or ""
     text_right = page.crop(right_box).extract_text() or ""
-    
     return text_left + "\n" + text_right
 
 def extract_questions_pdf(pdf_file):
-    """Extrai texto e separa por 'QUESTÃO XX'."""
     full_text = ""
     try:
         with pdfplumber.open(pdf_file) as pdf:
             for page in pdf.pages:
                 full_text += extract_text_two_columns(page)
-    except Exception as e:
+    except Exception:
         return None
 
-    # Limpeza básica
     cleanup = ["Confidencial até o momento da aplicação", "UVSP2404", "Rascunho"]
     for junk in cleanup:
         full_text = full_text.replace(junk, "")
 
-    # Regex para quebrar nas questões
     pattern = r'(?:QUESTÃO\s+)(\d+)'
     parts = re.split(pattern, full_text)
-    
     questions = {}
     if len(parts) > 1:
         for i in range(1, len(parts), 2):
-            q_num = str(int(parts[i])) # Remove zeros à esquerda (01 -> 1)
+            q_num = str(int(parts[i])) 
             if i + 1 < len(parts):
                 questions[q_num] = parts[i+1].strip()
     return questions
 
 def extract_gabarito_pdf(pdf_file):
-    """
-    Lê o PDF do gabarito e extrai pares Número-Letra.
-    Suporta formatos sujos como: $1-E$, 28C, 15\div D
-    """
     text = ""
-    with pdfplumber.open(pdf_file) as pdf:
-        for page in pdf.pages:
-            text += page.extract_text() or ""
-            
-    answers = {}
-    # Regex Explicado:
-    # (\d{1,2})  -> Captura 1 ou 2 dígitos (ex: 1, 56)
-    # [\W_]* -> Ignora qualquer símbolo (hífen, cifrão, espaço, barra)
-    # ([A-E])    -> Captura a letra da resposta
-    matches = re.findall(r'(\d{1,2})[\W_]*([A-E])', text, re.IGNORECASE)
-    
-    for num, letter in matches:
-        answers[str(int(num))] = letter.upper()
-        
-    return answers
+    try:
+        with pdfplumber.open(pdf_file) as pdf:
+            for page in pdf.pages:
+                text += page.extract_text() or ""
+        answers = {}
+        matches = re.findall(r'(\d{1,2})[\W_]*([A-E])', text, re.IGNORECASE)
+        for num, letter in matches:
+            answers[str(int(num))] = letter.upper()
+        return answers
+    except:
+        return {}
 
 def ask_gemini(api_key, question_text, correct_answer):
     if not api_key:
-        return "🔒 Insira sua API Key na barra lateral para ver a explicação."
-    
+        return "⚠️ Configure a API Key na barra lateral."
     try:
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel('gemini-1.5-flash')
         prompt = f"""
-        Aja como um professor particular de vestibular.
+        Você é um tutor de vestibular. O aluno tentou responder a questão.
         Questão: {question_text}
-        Gabarito Oficial: {correct_answer}
+        Gabarito Correto: {correct_answer}
         
-        Explique de forma didática e objetiva como chegar na resposta correta.
+        Explique por que essa é a correta e analise brevemente por que as outras estariam erradas se possível.
         """
         response = model.generate_content(prompt)
         return response.text
     except Exception as e:
-        return f"Erro de conexão com IA: {e}"
+        return f"Erro: {e}"
 
-# --- 3. INTERFACE (FRONTEND) ---
+# --- 3. ESTADO DA SESSÃO (INIT) ---
+if 'user_answers' not in st.session_state:
+    st.session_state.user_answers = {} # Dicionário: {'1': 'A', '5': 'C'}
 
-# Sidebar para Uploads
+if 'q_idx' not in st.session_state:
+    st.session_state.q_idx = 0
+
+# --- 4. INTERFACE ---
+
 with st.sidebar:
-    st.markdown("### ⚙️ Configurações")
+    st.header("⚙️ Painel de Controle")
     api_key = st.text_input("Gemini API Key", type="password")
-    
     st.markdown("---")
-    st.markdown("### 📂 Arquivos")
-    pdf_prova = st.file_uploader("1. Caderno de Questões (PDF)", type="pdf")
+    pdf_prova = st.file_uploader("1. Prova (PDF)", type="pdf")
     pdf_gabarito = st.file_uploader("2. Gabarito (PDF)", type="pdf")
     
-    st.info("O sistema ajusta automaticamente as colunas da prova da Univesp.")
+    # Resetar progresso
+    if st.button("🗑️ Limpar Respostas"):
+        st.session_state.user_answers = {}
+        st.rerun()
 
-# Área Principal
 if pdf_prova:
-    # Processamento
     questions = extract_questions_pdf(pdf_prova)
+    answers = extract_gabarito_pdf(pdf_gabarito) if pdf_gabarito else {}
     
-    # Processamento do Gabarito (se houver)
-    answers = {}
-    if pdf_gabarito:
-        answers = extract_gabarito_pdf(pdf_gabarito)
-
     if not questions:
-        st.error("Erro na leitura. Verifique se o PDF é legível (OCR).")
+        st.error("Não foi possível ler as questões.")
     else:
-        # Estado da navegação
-        if 'q_idx' not in st.session_state:
-            st.session_state.q_idx = 0
-            
         q_keys = sorted(questions.keys(), key=lambda x: int(x))
         total_q = len(q_keys)
         
         # Garante índice válido
-        if st.session_state.q_idx >= total_q:
-            st.session_state.q_idx = 0
+        if st.session_state.q_idx >= total_q: st.session_state.q_idx = 0
+        if st.session_state.q_idx < 0: st.session_state.q_idx = 0
             
         current_num = q_keys[st.session_state.q_idx]
         current_txt = questions[current_num]
-        current_ans = answers.get(current_num, None)
-
-        # --- CABEÇALHO DA QUESTÃO ---
-        # Barra de progresso
-        progress = (st.session_state.q_idx + 1) / total_q
-        st.progress(progress)
+        official_ans = answers.get(current_num, None)
         
-        col_title, col_status = st.columns([3, 1])
-        with col_title:
-            st.markdown(f"<h2 class='header-text'>Questão {current_num}</h2>", unsafe_allow_html=True)
-        with col_status:
-            st.caption(f"{st.session_state.q_idx + 1}/{total_q}")
+        # Recupera resposta do usuário se já existir
+        user_choice = st.session_state.user_answers.get(current_num, None)
 
-        # --- CARD DA QUESTÃO (VISUAL LIMPO) ---
+        # Barra de Progresso Superior
+        st.progress((st.session_state.q_idx + 1) / total_q)
+        
+        # --- EXIBIÇÃO DA QUESTÃO ---
         st.markdown(f"""
             <div class="question-card">
+                <span class="q-number">QUESTÃO {current_num}</span>
                 {current_txt}
             </div>
         """, unsafe_allow_html=True)
 
-        # --- ÁREA DE RESPOSTA E IA ---
-        st.markdown("### 📝 Resolução")
+        # --- ÁREA DE INTERAÇÃO (BOTÕES) ---
+        st.markdown("### Escolha a alternativa:")
         
-        col_gab, col_ai = st.columns(2)
+        # Colunas para os botões A, B, C, D, E
+        cols = st.columns(5)
+        options = ['A', 'B', 'C', 'D', 'E']
         
-        with col_gab:
-            # Container estilizado para o gabarito
-            with st.container(border=True):
-                st.markdown("**Gabarito Oficial**")
-                if st.button("👁️ Revelar Resposta", key=f"btn_rev_{current_num}"):
-                    if current_ans:
-                        st.success(f"A alternativa correta é: **{current_ans}**")
-                    else:
-                        st.warning("Gabarito não encontrado para esta questão.")
-                        
-        with col_ai:
-            with st.container(border=True):
-                st.markdown("**Professor IA**")
-                if st.button("🤖 Explicar Passo a Passo", key=f"btn_ai_{current_num}"):
-                    with st.spinner("Gerando explicação..."):
-                        expl = ask_gemini(api_key, current_txt, current_ans)
-                        st.markdown(expl)
+        # Renderiza os botões
+        for idx, opt in enumerate(options):
+            # Se o usuário clicar, salvamos no estado
+            if cols[idx].button(opt, key=f"btn_{current_num}_{opt}", 
+                                type="primary" if user_choice == opt else "secondary"):
+                st.session_state.user_answers[current_num] = opt
+                st.rerun() # Recarrega para processar o feedback
 
-        st.markdown("---")
+        # --- FEEDBACK E IA ---
+        if user_choice:
+            st.markdown("---")
+            
+            # Verificação de Acerto/Erro
+            if not official_ans:
+                st.warning(f"Você escolheu **{user_choice}**, mas não carregou o gabarito ainda.")
+            elif user_choice == official_ans:
+                st.success(f"✅ **Parabéns!** A alternativa **{user_choice}** está correta.")
+            else:
+                st.error(f"❌ **Ops!** Você marcou **{user_choice}**, mas a correta é **{official_ans}**.")
+            
+            # Botão de Explicação (Só aparece se já respondeu)
+            if st.button("🤖 Por que essa é a resposta?"):
+                with st.spinner("Professor Gemini explicando..."):
+                    expl = ask_gemini(api_key, current_txt, official_ans)
+                    st.markdown(expl)
 
-        # --- RODAPÉ DE NAVEGAÇÃO ---
+        st.markdown("<br>", unsafe_allow_html=True)
+        
+        # --- NAVEGAÇÃO ---
         c1, c2, c3 = st.columns([1, 2, 1])
-        
         if c1.button("⬅️ Anterior"):
-            if st.session_state.q_idx > 0:
-                st.session_state.q_idx -= 1
-                st.rerun()
-                
+            st.session_state.q_idx -= 1
+            st.rerun()
+            
         if c3.button("Próxima ➡️"):
-            if st.session_state.q_idx < total_q - 1:
-                st.session_state.q_idx += 1
-                st.rerun()
+            st.session_state.q_idx += 1
+            st.rerun()
 
 else:
-    # TELA INICIAL (QUANDO NÃO TEM ARQUIVO)
-    st.markdown("""
-    <div style="text-align: center; padding: 50px;">
-        <h1>🎓 Bem-vindo ao Vestibular Master</h1>
-        <p style="font-size: 18px;">Faça upload do caderno de prova e do gabarito na barra lateral para começar seus estudos.</p>
-    </div>
-    """, unsafe_allow_html=True)
+    st.info("👆 Faça o upload dos arquivos para começar o simulado.")
